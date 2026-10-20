@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Amsterdam Tech Pay</title>
+<meta name="description" content="A 3D map of Amsterdam built from real 3DBAG and TOP10NL data, with Levels.fyi pay medians for 65 tech companies.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Dark only. Layout: full-bleed 3D map; one docked panel on the left (search, ranking), a detail panel on the right, map controls in the corner. */
+:root{
+  --bg:#0a111c; --surface:#121a26; --surface-2:#192331; --fg:#eef1f5; --muted:#94a0b3; --line:rgba(255,255,255,.09);
+  --accent:#ff5468; --accent-soft:rgba(255,84,104,.14); --warn:#e8b64c; --water-label:#86b8e4; --halo:rgba(10,17,28,.9);
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 12px 34px rgba(0,0,0,.45);
+  --sans:"Geist","Helvetica Neue",Arial,sans-serif; --mono:"Geist Mono",ui-monospace,Menlo,monospace;
+  color-scheme:dark;
+}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 var(--sans);overflow:hidden;-webkit-font-smoothing:antialiased}
+[hidden]{display:none!important}
+button,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+#gl{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+
+/* map labels */
+#labels{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:5}
+#labels>*{position:absolute;left:0;top:0;white-space:nowrap;will-change:transform}
+.lab{pointer-events:auto;display:flex;align-items:center;gap:6px;padding:3px 9px 3px 7px;border-radius:999px;border:1px solid var(--line);background:var(--surface);box-shadow:var(--shadow);font-size:12px;font-weight:500;line-height:1.3}
+.lab i{width:7px;height:7px;border-radius:50%}
+.lab em{font-style:normal;font-family:var(--mono);font-size:11px;color:var(--muted)}
+.lab.hot{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow);z-index:3}
+.lm,.ar,.wl,.rl,.st{text-shadow:0 0 2px var(--halo),0 0 4px var(--halo),0 0 6px var(--halo)}
+.lm{display:flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600}
+.lm i{width:6px;height:6px;border-radius:2px;background:var(--fg);box-shadow:0 0 0 2px var(--halo)}
+.ar{font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.wl{font-size:11.5px;font-style:italic;font-weight:500;color:var(--water-label);letter-spacing:.02em}
+.rl{font-size:10.5px;font-weight:500;color:var(--muted)}
+.st{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:500}
+.st i{width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 2px var(--halo)}
+
+/* side panel */
+.side{position:fixed;z-index:20;left:max(16px,env(safe-area-inset-left,0px));top:calc(env(safe-area-inset-top,0px) + 16px);bottom:calc(env(safe-area-inset-bottom,0px) + 16px);width:348px;
+  display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);overflow:hidden}
+.handle{display:none}
+.brand{display:flex;align-items:center;gap:12px;padding:16px 16px 12px}
+.mark{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;font-weight:700;font-size:11px;letter-spacing:-.04em;line-height:.75;flex:none}
+.mark b{display:block;writing-mode:vertical-rl;text-orientation:upright;font-size:10px}
+.brand h1{margin:0;font-size:17px;font-weight:650;letter-spacing:-.02em;line-height:1.1}
+.brand p{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+.search{position:relative;margin:0 12px;display:flex;align-items:center;gap:8px;padding:0 10px;height:40px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line);color:var(--muted)}
+.search:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.search input{flex:1;min-width:0;border:0;background:none;outline:none;color:var(--fg);font-size:14px}
+.search input::placeholder{color:var(--muted)}
+kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--muted)}
+.results{list-style:none;margin:8px 0 0;padding:0 8px 8px;overflow:auto;flex:1;min-height:0}
+.results button{width:100%;display:flex;align-items:center;gap:10px;padding:8px;border:0;border-radius:9px;background:none;text-align:left}
+.results button:hover,.results button[aria-selected="true"]{background:var(--surface-2)}
+.results i{width:8px;height:8px;border-radius:50%;flex:none}
+.results i.pin{width:8px;height:8px;border-radius:2px;background:var(--muted)}
+.results .t{flex:1;min-width:0;display:flex;flex-direction:column}
+.results b{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.results small,.empty{color:var(--muted);font-size:12px}
+.results .v{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.empty{padding:12px 10px;list-style:none}
+.side .rankpanel{display:flex;flex-direction:column;min-height:0;flex:1;margin-top:12px;border-top:1px solid var(--line)}
+.side.searching .rankpanel{display:none}
+.side:not(.searching) .results{display:none}
+.tabs{display:flex;gap:2px;padding:3px;margin:12px 12px 0;border-radius:10px;background:var(--surface-2)}
+.tabs button{flex:1;border:0;background:none;border-radius:8px;padding:6px 8px;font-size:12.5px;font-weight:500;color:var(--muted);white-space:nowrap}
+.tabs button[aria-pressed="true"]{background:var(--surface);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px var(--line)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px 4px}
+.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:4px 10px 4px 8px;font-size:12px;font-weight:500}
+.chip i{width:8px;height:8px;border-radius:50%}
+.chip span{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.chip[aria-pressed="false"]{color:var(--muted);background:var(--surface-2)}
+.chip[aria-pressed="false"] i{opacity:.3}
+.listhead{display:flex;justify-content:space-between;padding:10px 16px 4px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+#rankList{list-style:none;margin:0;padding:0 8px 8px;overflow:auto;flex:1;min-height:0}
+#rankList button{width:100%;display:grid;grid-template-columns:24px 1fr auto;align-items:center;gap:8px;padding:8px;border:0;border-radius:9px;background:none;text-align:left}
+#rankList button:hover{background:var(--surface-2)}
+#rankList button[aria-current="true"]{background:var(--accent-soft)}
+#rankList .n{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center}
+#rankList .nm{min-width:0;display:flex;flex-direction:column}
+#rankList b{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rankList small{color:var(--muted);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#rankList .bar{display:block;height:3px;border-radius:2px;background:var(--surface-2);margin-top:5px;overflow:hidden}
+#rankList .bar span{display:block;height:100%;border-radius:2px}
+#rankList .v{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums}
+.foot{padding:10px 16px 14px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);line-height:1.5}
+.foot a{color:inherit}
+
+/* detail panel */
+.card{position:fixed;z-index:22;right:max(16px,env(safe-area-inset-right,0px));top:calc(env(safe-area-inset-top,0px) + 16px);width:372px;max-height:calc(100% - 32px);overflow:auto;
+  background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:16px}
+.card header{display:flex;gap:12px;align-items:flex-start}
+.card .ttl{flex:1;min-width:0}
+.sector{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:var(--muted)}
+.sector i{width:8px;height:8px;border-radius:50%}
+.card h2{margin:4px 0 2px;font-size:24px;font-weight:650;letter-spacing:-.025em;line-height:1.15;text-wrap:balance}
+.card header p{margin:0;color:var(--muted);font-size:13px}
+.iconbtn{display:grid;place-items:center;width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--surface);flex:none}
+.iconbtn:hover{background:var(--surface-2)}
+.card .tabs{margin:14px 0 0}
+.kpi{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-top:16px}
+.lbl{display:block;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.big{display:block;font-size:34px;font-weight:650;letter-spacing:-.03em;font-variant-numeric:tabular-nums;line-height:1.1;margin-top:4px}
+.rankpill{font-family:var(--mono);font-size:12px;padding:3px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);white-space:nowrap}
+.split{display:flex;gap:2px;height:8px;margin:14px 0 10px}
+.split span{height:100%;border-radius:2px}
+.splitk{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0}
+.splitk dt{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.splitk dt i{width:8px;height:8px;border-radius:2px}
+.splitk dd{margin:2px 0 0;font-family:var(--mono);font-size:13.5px;font-variant-numeric:tabular-nums}
+.tblwrap{overflow-x:auto;margin-top:14px;border:1px solid var(--line);border-radius:10px}
+table.lv{width:100%;border-collapse:collapse;font-size:12.5px}
+table.lv th{font-weight:600;font-size:11px;color:var(--muted);text-align:right;padding:8px 10px;background:var(--surface-2)}
+table.lv td{text-align:right;padding:7px 10px;border-top:1px solid var(--line);font-family:var(--mono);font-variant-numeric:tabular-nums}
+table.lv th:first-child,table.lv td:first-child{text-align:left;font-family:var(--sans)}
+.lnk{display:inline-flex;align-items:center;gap:6px;margin-top:14px;color:var(--accent);font-weight:550;text-decoration:none}
+.lnk svg{width:15px;height:15px}
+.lnk:hover{text-decoration:underline}
+.note{font-size:12px;color:var(--muted);margin:10px 0 0}
+
+/* map controls */
+.ctrl{position:fixed;z-index:18;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(env(safe-area-inset-bottom,0px) + 16px);display:flex;flex-direction:column;gap:8px;transition:right .25s}
+body.has-card .ctrl{right:calc(max(16px,env(safe-area-inset-right,0px)) + 384px)}
+.grp{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.grp button{display:grid;place-items:center;width:40px;height:40px;border:0;background:none;font-size:12px;font-weight:600}
+.grp button+button{border-top:1px solid var(--line)}
+.grp button:hover{background:var(--surface-2)}
+#needle{display:block;width:16px;height:22px;transition:transform .08s linear}
+.layers{position:fixed;z-index:19;right:calc(max(16px,env(safe-area-inset-right,0px)) + 52px);bottom:calc(env(safe-area-inset-bottom,0px) + 16px);width:260px;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);padding:12px;display:flex;flex-direction:column;gap:12px}
+body.has-card .layers{right:calc(max(16px,env(safe-area-inset-right,0px)) + 436px)}
+.layers h3{margin:0;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.layers .tabs{margin:6px 0 0}
+.layers label{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px;padding:3px 0}
+.layers input[type=checkbox]{appearance:none;width:34px;height:20px;border-radius:999px;background:var(--surface-2);border:1px solid var(--line);position:relative;margin:0;flex:none;cursor:pointer;transition:background .15s}
+.layers input[type=checkbox]::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .15s}
+.layers input[type=checkbox]:checked{background:var(--accent);border-color:var(--accent)}
+.layers input[type=checkbox]:checked::after{transform:translateX(14px)}
+
+.hud{position:fixed;z-index:15;left:calc(max(16px,env(safe-area-inset-left,0px)) + 364px);bottom:calc(env(safe-area-inset-bottom,0px) + 16px);display:flex;align-items:center;gap:14px;font-size:11px;color:var(--muted);text-shadow:0 0 3px var(--halo)}
+.scale{display:flex;flex-direction:column;gap:3px}
+.scale span{display:block;height:5px;border:1.5px solid var(--fg);border-top:0;opacity:.7}
+.scale b{font-weight:500;font-family:var(--mono);color:var(--fg)}
+.tip{position:fixed;left:0;top:0;z-index:30;pointer-events:none;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);padding:7px 10px;display:flex;flex-direction:column;font-size:12px}
+.tip b{font-weight:600}
+.tip span{color:var(--muted)}
+
+.loader{position:fixed;inset:0;z-index:60;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;transition:opacity .6s,visibility .6s}
+.loader .mark{width:52px;height:52px;border-radius:14px}
+.loader .mark b{font-size:14px}
+.loader strong{font-size:22px;font-weight:650;letter-spacing:-.02em}
+.loader .bar{width:220px;height:4px;border-radius:2px;background:var(--surface-2);overflow:hidden}
+.loader .bar i{display:block;height:100%;width:3%;background:var(--accent);transition:width .2s}
+.loader span{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:center;max-width:320px;padding:0 16px}
+.loader.done{opacity:0;visibility:hidden;pointer-events:none}
+.loader.error .bar{display:none}
+
+@media (max-width:720px){
+  .side{left:0;right:0;bottom:0;top:auto;width:auto;max-height:74%;border-radius:18px 18px 0 0;padding-bottom:env(safe-area-inset-bottom,0px);border-bottom:0}
+  .handle{display:block;align-self:center;width:44px;height:5px;margin:8px 0 0;border:0;border-radius:3px;background:var(--line);padding:0}
+  .handle::before{content:"";position:absolute;left:0;right:0;top:0;height:28px}
+  .brand{padding:8px 16px 10px}
+  .brand p{display:none}
+  .side:not(.open):not(.searching) .rankpanel,.side:not(.open):not(.searching) .foot{display:none}
+  .side:not(.open):not(.searching){padding-bottom:calc(env(safe-area-inset-bottom,0px) + 12px)}
+  .side.open,.side.searching{height:74%}
+  .card{left:8px;right:8px;top:auto;bottom:calc(env(safe-area-inset-bottom,0px) + 8px);width:auto;max-height:64%;z-index:25}
+  .ctrl{bottom:150px;right:12px}
+  body.has-card .ctrl{right:12px;bottom:calc(64% + 20px)}
+  .layers{right:64px;bottom:150px;width:min(260px,calc(100% - 80px))}
+  body.has-card .layers{right:64px}
+  .hud{left:12px;top:calc(env(safe-area-inset-top,0px) + 12px);bottom:auto}
+  #stat{display:none}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<canvas id="gl" aria-label="3D map of Amsterdam with tech companies shown as pay pillars"></canvas>
+<div id="labels"></div>
+
+<aside class="side" id="side" aria-label="Search and ranking">
+  <button class="handle" id="sheetHandle" type="button" aria-label="Expand or collapse the panel"></button>
+  <header class="brand"><span class="mark" aria-hidden="true"><b>XXX</b></span><div><h1>Amsterdam</h1><p>Tech pay, on a 3D map of the city</p></div></header>
+  <div class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="q" type="search" placeholder="Search companies, streets, canals" autocomplete="off" aria-label="Search the map"><kbd>/</kbd></div>
+  <ul class="results" id="qList" role="listbox" aria-label="Search results"></ul>
+  <section class="rankpanel">
+    <div class="tabs" role="group" aria-label="Role" id="rankRole"></div>
+    <div class="chips" id="legend" aria-label="Sectors"></div>
+    <div class="listhead"><span>Median total comp</span><span id="rankCount"></span></div>
+    <ol id="rankList"></ol>
+  </section>
+  <footer class="foot">Pay: <a href="https://www.levels.fyi" target="_blank" rel="noopener">Levels.fyi</a> medians for the Greater Amsterdam Area, Oct 2026. Buildings: <a href="https://3dbag.nl" target="_blank" rel="noopener">3DBAG</a> (3DGI, TU Delft). Topography: TOP10NL © Kadaster. Both CC BY 4.0.</footer>
+</aside>
+
+<aside class="card" id="card" hidden aria-live="polite"></aside>
+
+<div class="ctrl">
+  <div class="grp"><button id="zIn" type="button" aria-label="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button><button id="zOut" type="button" aria-label="Zoom out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button></div>
+  <div class="grp">
+    <button id="compass" type="button" aria-label="Reset to north"><svg id="needle" viewBox="0 0 16 22" aria-hidden="true" style="stroke:none"><path d="M8 1l4 10H4z" fill="var(--accent)"/><path d="M8 21L4 11h8z" fill="var(--muted)"/></svg></button>
+    <button id="tilt" type="button" aria-label="Switch to top-down view">2D</button>
+    <button id="home" type="button" aria-label="Back to the city centre"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
+    <button id="layersBtn" type="button" aria-label="Map layers and settings" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></svg></button>
+  </div>
+</div>
+
+<div class="layers" id="layers" hidden>
+  <div><h3>Layers</h3>
+    <label>Pay pillars<input type="checkbox" id="tPillars" checked></label>
+    <label>Metro 52 &amp; 54<input type="checkbox" id="tMetro" checked></label>
+    <label>Street names<input type="checkbox" id="tStreets" checked></label>
+    <label>Neighbourhoods<input type="checkbox" id="tDistricts" checked></label>
+  </div>
+  <div><h3>Company labels</h3><div class="tabs" id="labelSeg" role="group" aria-label="Company labels"><button type="button" data-l="all" aria-pressed="true">All</button><button type="button" data-l="key" aria-pressed="false">Top 12</button></div></div>
+  <div><h3>Currency</h3><div class="tabs" id="cur" role="group" aria-label="Currency"><button type="button" data-c="EUR" aria-pressed="true">€ EUR</button><button type="button" data-c="USD" aria-pressed="false">$ USD</button><button type="button" data-c="GBP" aria-pressed="false">£ GBP</button></div></div>
+</div>
+
+<div class="hud"><div class="scale" id="scale"><span></span><b></b></div><span id="stat"></span></div>
+<div class="tip" id="tip" hidden></div>
+<div class="loader" id="loader"><span class="mark" aria-hidden="true"><b>XXX</b></span><strong>Amsterdam</strong><div class="bar"><i id="loadBar"></i></div><span id="loadMsg">Starting…</span></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="data.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
