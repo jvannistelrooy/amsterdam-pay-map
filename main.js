@@ -332,11 +332,15 @@ function renderSearch(){const s=q.value.trim().toLowerCase();side.classList.togg
   qList.querySelectorAll("button").forEach(b=>b.addEventListener("click",()=>choose(qRows[+b.dataset.i])));}
 function choose(r){if(!r)return;q.value="";renderSearch();q.blur();if(r.c)openCompany(r.c,true);else{closeCard();animateTo({t:r.p.p,d:r.p.d||0.5});}}
 q.addEventListener("input",renderSearch);
-q.addEventListener("keydown",e=>{if(e.key==="Escape"){q.value="";renderSearch();q.blur();}
+q.addEventListener("keydown",e=>{if(e.key==="Escape"){q.value="";renderSearch();q.blur();if(compact())side.classList.remove("open");}
   if((e.key==="ArrowDown"||e.key==="ArrowUp")&&qRows.length){e.preventDefault();qSel=clamp(qSel+(e.key==="ArrowDown"?1:-1),0,qRows.length-1);qList.querySelectorAll("button").forEach((b,i)=>{b.setAttribute("aria-selected",i===qSel);if(i===qSel)b.scrollIntoView({block:"nearest"});});}
   if(e.key==="Enter")choose(qRows[qSel]);});
 q.addEventListener("focus",()=>side.classList.add("open"));
 $("#sheetHandle").addEventListener("click",()=>side.classList.toggle("open"));
+// Short narrow viewports hide the sheet behind a search button (see index.html); open it before focusing, a hidden input can't take focus.
+const compactMQ=matchMedia("(max-width:900px) and (max-height:560px)"),compact=()=>compactMQ.matches;
+function openSearch(){side.classList.add("open");q.focus();}
+$("#searchOpen").addEventListener("click",openSearch);
 
 /* ---------- detail card ---------- */
 const cardEl=$("#card");let cardRole="swe";
@@ -394,7 +398,7 @@ tog("#tStreets",v=>{streetsOn=v;});
 const ray=new THREE.Raycaster(),ptr=new THREE.Vector2(),tip=$("#tip");let down=null;
 function pick(e){const r=canvas.getBoundingClientRect();ptr.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);ray.setFromCamera(ptr,camera);const h=ray.intersectObjects(pickables.filter(m=>m.visible));return h.length?h[0].object.userData.c:null;}
 canvas.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY];anim=null;lockTilt();});
-canvas.addEventListener("pointerup",e=>{if(!down)return;const moved=Math.hypot(e.clientX-down[0],e.clientY-down[1]);down=null;if(moved>5)return;const c=pick(e);if(c)openCompany(c,true);else closeCard();});
+canvas.addEventListener("pointerup",e=>{if(!down)return;const moved=Math.hypot(e.clientX-down[0],e.clientY-down[1]);down=null;if(moved>5)return;const c=pick(e);if(c)openCompany(c,true);else{closeCard();if(compact())side.classList.remove("open");}});
 // Wheel zooms toward the ground point under the cursor (the built-in controls only zoom to the screen centre).
 // Captured on window so MapControls never sees the wheel; pinch zoom on touch still goes through the controls.
 const groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0),zoomPt=new THREE.Vector3();let zoomPending=0;
@@ -412,7 +416,7 @@ canvas.addEventListener("pointermove",e=>{if(e.pointerType!=="mouse"||e.buttons)
   if(c){tip.hidden=false;tip.innerHTML=`<b>${esc(c.n)}</b><span>${shortPay(c)} · ${esc(c.hood)}</span>`;tip.style.transform=`translate(${e.clientX+14}px,${e.clientY+14}px)`;}else tip.hidden=true;});
 canvas.addEventListener("pointerleave",()=>{tip.hidden=true;});
 addEventListener("keydown",e=>{
-  if(((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k")||(e.key==="/"&&document.activeElement!==q)){e.preventDefault();q.focus();return;}
+  if(((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="k")||(e.key==="/"&&document.activeElement!==q)){e.preventDefault();openSearch();return;}
   if(e.target instanceof HTMLInputElement)return;
   if(e.key==="Escape"){if(!layersEl.hidden)layersEl.hidden=true;else closeCard();}
   if(e.key==="+"||e.key==="=")zoomBy(0.6);if(e.key==="-"||e.key==="_")zoomBy(1/0.6);
@@ -431,7 +435,7 @@ function updateHud(d){const kmPerPx=2*d*Math.tan(THREE.MathUtils.degToRad(camera
 const NARROW=900;   // matches the bottom-sheet breakpoint in index.html
 // Centre the map in the area the panels leave free.
 const off={x:0,y:0};
-function updateOffset(){const desk=W>NARROW,card=!cardEl.hidden;const tx=desk?(-(364)+(card?384:0))/2:0,ty=desk?0:(card?H*0.26:60);
+function updateOffset(){const desk=W>NARROW,card=!cardEl.hidden;const tx=desk?(-(364)+(card?384:0))/2:0,ty=desk?0:(card?H*0.26:compact()?0:60);
   off.x+=(tx-off.x)*0.12;off.y+=(ty-off.y)*0.12;if(Math.abs(off.x)<0.5&&Math.abs(off.y)<0.5&&Math.abs(tx)<0.5&&Math.abs(ty)<0.5){if(camera.view&&camera.view.enabled)camera.clearViewOffset();return;}
   camera.setViewOffset(W,H,off.x,off.y,W,H);}
 function resize(){W=innerWidth;H=innerHeight;renderer.setSize(W,H,false);camera.aspect=W/H;camera.fov=W<=NARROW?55:42;camera.updateProjectionMatrix();}
