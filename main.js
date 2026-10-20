@@ -105,39 +105,53 @@ const tick=()=>new Promise(r=>setTimeout(r,0));
 let QX,QY,RES,BOUNDS={x0:-7,x1:8,z0:-6,z1:9};
 const lampPos=[];
 
+// Once a buffer is on the GPU its CPU copy is dead weight (about 90 MB in all), so it's dropped on upload.
+// Nothing is drawn before the pillars are seated (see frame), so the raycasts in seatPillars still see the buildings.
+function dropArr(){this.array=null;}
+function dropAfterUpload(g){if(!g.boundingSphere)g.computeBoundingSphere();for(const k in g.attributes)g.attributes[k].onUpload(dropArr);if(g.index)g.index.onUpload(dropArr);return g;}
+// Without the CPU copies a lost GPU context can't be rebuilt in place, so start over.
+canvas.addEventListener("webglcontextrestored",()=>location.reload());
+
+// Scratch buffers for one chunk, grown as needed and reused, so building the city doesn't churn through big JS arrays.
+let sPos=new Int16Array(1<<19),sCol=new Uint8Array(1<<19),sHH=new Uint8Array(1<<17),sIdx=new Uint32Array(1<<19);
+const grow=(a,n)=>{if(n<=a.length)return a;let m=a.length;while(m<n)m*=2;const b=new a.constructor(m);b.set(a);return b;};
 const buildingMeshes=[];
 async function buildBuildings(head,S,progress){
   const CH=head.chunk,rd2=ringReader(S.bS,S.bXY);let b=0,ri=0,done=0;const total=head.chunks.reduce((a,c)=>a+c[2],0);
   for(const [ci,cj,count] of head.chunks){
-    const cX=QX+ci*CH,cY=QY+cj*CH;const pos=[],col=[],hh=[],idx=[];let nv=0;
+    const cX=QX+ci*CH,cY=QY+cj*CH;let nv=0,ni=0;
     for(let k=0;k<count;k++,b++){
       const h=S.bH[b]/10,yr=S.bYear[b],roof=S.bRoof[b],nr=S.bRings[b];
       const era=ERA_RGB.find(e=>yr<e[0])[1];const r1=hash(b*7+1),r2=hash(b*13+5);
       let wc=era[(r1*era.length)|0];if(h>40)wc=ERA_RGB[5][1][(r2*4)|0];
       const rc=(roof===1?ROOF_RGB.s:ROOF_RGB.f)[(r2*4)|0];const sh=0.9+r2*0.2;
       const hdm=Math.round(h*10),aH=Math.min(255,Math.round(h));
-      const rings=[];
-      for(let r=0;r<nr;r++,ri++){const q=rd2(S.bLen[ri]);const n=q.length/2,pts=new Float32Array(2*n);
+      const wr=Math.min(255,wc[0]*sh),wg=Math.min(255,wc[1]*sh),wb=Math.min(255,wc[2]*sh),rr=Math.min(255,rc[0]*sh),rg=Math.min(255,rc[1]*sh),rb=Math.min(255,rc[2]*sh);
+      const rings=[];let np=0;
+      for(let r=0;r<nr;r++,ri++){const q=rd2(S.bLen[ri]);const n=q.length/2,pts=new Float32Array(2*n);np+=n;
         for(let i=0;i<n;i++){pts[2*i]=Math.round((QX+q[2*i]*RES-cX)*10);pts[2*i+1]=-Math.round((QY+q[2*i+1]*RES-cY)*10);}rings.push(pts);}
+      // 4 wall vertices and 1 roof vertex per ring point; 6 wall indices and at most 3 roof indices per point
+      const vMax=nv+5*np;sPos=grow(sPos,3*vMax);sCol=grow(sCol,3*vMax);sHH=grow(sHH,vMax);sIdx=grow(sIdx,ni+9*np);
       // walls
       for(const pts of rings){const n=pts.length/2;
-        for(let i=0;i<n;i++){const j=(i+1)%n,ax=pts[2*i],az=pts[2*i+1],bx=pts[2*j],bz=pts[2*j+1];
-          pos.push(ax,0,az,bx,0,bz,bx,hdm,bz,ax,hdm,az);
-          for(let v=0;v<4;v++){col.push(wc[0]*sh,wc[1]*sh,wc[2]*sh);hh.push(aH);}
-          idx.push(nv,nv+1,nv+2,nv,nv+2,nv+3);nv+=4;}}
+        for(let i=0;i<n;i++){const j=(i+1)%n,ax=pts[2*i],az=pts[2*i+1],bx=pts[2*j],bz=pts[2*j+1],p=3*nv;
+          sPos[p]=ax;sPos[p+1]=0;sPos[p+2]=az;sPos[p+3]=bx;sPos[p+4]=0;sPos[p+5]=bz;sPos[p+6]=bx;sPos[p+7]=hdm;sPos[p+8]=bz;sPos[p+9]=ax;sPos[p+10]=hdm;sPos[p+11]=az;
+          for(let v=0;v<4;v++){sCol[p+3*v]=wr;sCol[p+3*v+1]=wg;sCol[p+3*v+2]=wb;sHH[nv+v]=aH;}
+          sIdx[ni]=nv;sIdx[ni+1]=nv+1;sIdx[ni+2]=nv+2;sIdx[ni+3]=nv;sIdx[ni+4]=nv+2;sIdx[ni+5]=nv+3;ni+=6;nv+=4;}}
       // roof
       const contour=[],holes=[];rings.forEach((pts,r)=>{const a=[];for(let i=0;i<pts.length;i+=2)a.push(new THREE.Vector2(pts[i],pts[i+1]));if(r===0)contour.push(...a);else holes.push(a);});
       let faces;try{faces=THREE.ShapeUtils.triangulateShape(contour,holes);}catch(e){faces=[];}
       const all=contour.concat(...holes),r0=nv;
-      all.forEach(v=>{pos.push(v.x,hdm,v.y);col.push(rc[0]*sh,rc[1]*sh,rc[2]*sh);hh.push(0);});nv+=all.length;
-      faces.forEach(f=>idx.push(r0+f[0],r0+f[1],r0+f[2]));
+      for(const v of all){const p=3*nv;sPos[p]=v.x;sPos[p+1]=hdm;sPos[p+2]=v.y;sCol[p]=rr;sCol[p+1]=rg;sCol[p+2]=rb;sHH[nv]=0;nv++;}
+      sIdx=grow(sIdx,ni+3*faces.length);
+      for(const f of faces){sIdx[ni]=r0+f[0];sIdx[ni+1]=r0+f[1];sIdx[ni+2]=r0+f[2];ni+=3;}
     }
     const g=new THREE.BufferGeometry();
-    g.setAttribute("position",new THREE.BufferAttribute(new Int16Array(pos),3));
-    g.setAttribute("color",new THREE.BufferAttribute(new Uint8Array(col.map(v=>Math.min(255,v))),3,true));
-    g.setAttribute("aH",new THREE.BufferAttribute(new Uint8Array(hh),1,false));
-    g.setIndex(new THREE.BufferAttribute(nv>65535?new Uint32Array(idx):new Uint16Array(idx),1));
-    g.computeBoundingSphere();g.boundingSphere.radius*=1.05;
+    g.setAttribute("position",new THREE.BufferAttribute(sPos.slice(0,3*nv),3));
+    g.setAttribute("color",new THREE.BufferAttribute(sCol.slice(0,3*nv),3,true));
+    g.setAttribute("aH",new THREE.BufferAttribute(sHH.slice(0,nv),1,false));
+    g.setIndex(new THREE.BufferAttribute(nv>65535?sIdx.slice(0,ni):new Uint16Array(sIdx.subarray(0,ni)),1));
+    g.computeBoundingSphere();g.boundingSphere.radius*=1.05;dropAfterUpload(g);
     const m=new THREE.Mesh(g,bMat);const o=sxz(cX,cY);m.position.set(o[0],0,o[1]);m.scale.setScalar(0.0001);scene.add(m);buildingMeshes.push(m);
     done+=count;progress(done/total);await tick();
   }
@@ -151,17 +165,17 @@ function buildPolys(S,pfx,y,meshFor,lampsFrom){
     const all=contour.concat(...holes);all.forEach(v=>G.pos.push(v.x,y,v.y));faces.forEach(f=>G.idx.push(G.nv+f[0],G.nv+f[1],G.nv+f[2]));G.nv+=all.length;
     if(lampsFrom&&lampsFrom(c)&&contour.length){let sx=0,sz=0;contour.forEach(v=>{sx+=v.x;sz+=v.y;});lampPos.push(sx/contour.length,0.004,sz/contour.length);}}
   Object.entries(groups).forEach(([c,G])=>{const g=new THREE.BufferGeometry();g.setAttribute("position",new THREE.Float32BufferAttribute(G.pos,3));g.setIndex(G.nv>65535?new THREE.Uint32BufferAttribute(G.idx,1):new THREE.Uint16BufferAttribute(G.idx,1));
-    g.computeVertexNormals();const m=new THREE.Mesh(g,meshFor(+c));m.renderOrder=-1;scene.add(m);});
+    g.computeVertexNormals();dropAfterUpload(g);const m=new THREE.Mesh(g,meshFor(+c));m.renderOrder=-1;scene.add(m);});
 }
 function buildRails(S){const C=S.lC,L=S.lLen,rdr=ringReader(S.lS,S.lXY);const g=[[],[],[]];
   for(let k=0;k<C.length;k++){const q=rdr(L[k]);for(let i=0;i+3<q.length;i+=2){const a=sxz(QX+q[i]*RES,QY+q[i+1]*RES),b=sxz(QX+q[i+2]*RES,QY+q[i+3]*RES);g[C[k]].push(a[0],0.0009,a[1],b[0],0.0009,b[1]);}}
-  g.forEach((p,c)=>{const geo=new THREE.BufferGeometry();geo.setAttribute("position",new THREE.Float32BufferAttribute(p,3));scene.add(new THREE.LineSegments(geo,M.track[c]));});}
+  g.forEach((p,c)=>{const geo=new THREE.BufferGeometry();geo.setAttribute("position",new THREE.Float32BufferAttribute(p,3));scene.add(new THREE.LineSegments(dropAfterUpload(geo),M.track[c]));});}
 function buildTrees(S){const n=S.tK.length,geo=new THREE.IcosahedronGeometry(1,0).translate(0,1.3,0);const im=new THREE.InstancedMesh(geo,M.tree,n);const o=new THREE.Object3D(),c=new THREE.Color();
   const TC=["#4f7f43","#5d8a4a","#476f3c","#6b9452","#3f6a3a"];
   for(let i=0;i<n;i++){const p=sxz(QX+S.tXY[2*i]*RES,QY+S.tXY[2*i+1]*RES),k=S.tK[i],r=hash(i*3+11);const s=(k===1?0.0036:0.003)+r*0.0024;
     o.position.set(p[0],0,p[1]);o.rotation.set(0,r*6,0);o.scale.set(s,s*1.2,s);o.updateMatrix();im.setMatrixAt(i,o.matrix);c.set(TC[(r*5)|0]).multiplyScalar(0.8+hash(i)*0.4);im.setColorAt(i,c);
     if(k===1&&i%3===0)lampPos.push(p[0],0.004,p[1]);}
-  scene.add(im);return n;}
+  im.instanceMatrix.onUpload(dropArr);im.instanceColor.onUpload(dropArr);scene.add(im);return n;}
 let lampPts=null;
 
 /* ---------- metro ---------- */
@@ -257,7 +271,10 @@ const lmLabels=LANDMARKS.map(([n,a,b])=>({name:n,pos:V3(a,b,0.02),el:mk("lm",`<i
 const distLabels=DISTRICTS.map(a=>({el:mk("ar",esc(a[0])),pos:V3(a[1],a[2],0.01)}));
 const stLabels=[];LINES.forEach(L=>L.st.forEach(s=>{if(stLabels.some(x=>x.name===s[0]))return;stLabels.push({el:mk("st",`<i style="background:${L.color}"></i>${esc(s[0])}`),name:s[0],pos:V3(s[1],s[2],0.004)});}));
 let waterLabels=[],roadLabels=[];
-function refreshPrices(){COMPANIES.forEach(c=>{c.el.querySelector("em").textContent=shortPay(c);});}
+function refreshPrices(){COMPANIES.forEach(c=>{c.el.querySelector("em").textContent=shortPay(c);c.el._w=undefined;});}
+// A label's width only changes with its text or the fonts, so it's measured once rather than forcing a layout per label every frame.
+const wOf=el=>el._w??(el._w=el.offsetWidth);
+const remeasure=()=>{for(const el of labelsEl.children)el._w=undefined;};
 refreshPrices();
 const tmp=new THREE.Vector3(),tmp2=new THREE.Vector3();let W=1,H=1;
 function scr(v){tmp.copy(v).project(camera);if(tmp.z>1||tmp.x<-1.08||tmp.x>1.08||tmp.y<-1.08||tmp.y>1.08)return null;return [(tmp.x*.5+.5)*W,(-tmp.y*.5+.5)*H];}
@@ -271,20 +288,20 @@ function updateLabels(d){
     if(!(activeSectors.has(c.sec)&&(labelMode==="all"||keySet.has(c.n)||c===selected))){vis(c.el,false);continue;}
     c.obj.anchor.y=c.lift+(pillarsOn?Math.min(c.h+0.003,Math.max(0.02,d*0.3)):0.008);
     const r=place(c.el,c.obj.anchor,-6);if(!r)continue;
-    const bw=c.el.offsetWidth||90,b=[r[0]-bw/2,r[1]-26,r[0]+bw/2,r[1]];
+    const bw=wOf(c.el)||90,b=[r[0]-bw/2,r[1]-26,r[0]+bw/2,r[1]];
     if(c!==selected&&hits(b,placed)){vis(c.el,false);continue;}
     placed.push(b);c.el.classList.toggle("hot",c===selected||c===hovered);
   }
-  const lmOn=d<3.2;for(const l of lmLabels){if(!lmOn){vis(l.el,false);continue;}const r=place(l.el,l.pos,-2);if(!r)continue;const w=l.el.offsetWidth||80,b=[r[0]-w/2,r[1]-18,r[0]+w/2,r[1]];if(hits(b,placed))vis(l.el,false);else placed.push(b);}
-  const sOn=metroOn&&d<1.8;for(const s of stLabels){if(!sOn){vis(s.el,false);continue;}const r=place(s.el,s.pos,-4);if(!r)continue;const w=s.el.offsetWidth||80,b=[r[0]-w/2,r[1]-18,r[0]+w/2,r[1]];if(hits(b,placed))vis(s.el,false);else placed.push(b);}
-  const wMin=4000*d*d;for(const l of waterLabels){if(l.area<wMin||d>9){vis(l.el,false);continue;}const r=place(l.el,l.pos,0,"c");if(!r)continue;const w=l.el.offsetWidth||60,b=[r[0]-w/2,r[1]-9,r[0]+w/2,r[1]+9];if(hits(b,placed))vis(l.el,false);else placed.push(b);}
+  const lmOn=d<3.2;for(const l of lmLabels){if(!lmOn){vis(l.el,false);continue;}const r=place(l.el,l.pos,-2);if(!r)continue;const w=wOf(l.el)||80,b=[r[0]-w/2,r[1]-18,r[0]+w/2,r[1]];if(hits(b,placed))vis(l.el,false);else placed.push(b);}
+  const sOn=metroOn&&d<1.8;for(const s of stLabels){if(!sOn){vis(s.el,false);continue;}const r=place(s.el,s.pos,-4);if(!r)continue;const w=wOf(s.el)||80,b=[r[0]-w/2,r[1]-18,r[0]+w/2,r[1]];if(hits(b,placed))vis(s.el,false);else placed.push(b);}
+  const wMin=4000*d*d;for(const l of waterLabels){if(l.area<wMin||d>9){vis(l.el,false);continue;}const r=place(l.el,l.pos,0,"c");if(!r)continue;const w=wOf(l.el)||60,b=[r[0]-w/2,r[1]-9,r[0]+w/2,r[1]+9];if(hits(b,placed))vis(l.el,false);else placed.push(b);}
   const rOn=streetsOn&&d<1.25,rMin=1600*d*d;
   for(const l of roadLabels){if(!rOn||l.area<rMin){vis(l.el,false);continue;}
     tmp2.copy(l.pos).add(l.dir);const a=scr(l.pos),bb=scr(tmp2);if(!a||!bb){vis(l.el,false);continue;}
     let ang=Math.atan2(bb[1]-a[1],bb[0]-a[0]);if(ang>Math.PI/2)ang-=Math.PI;if(ang<-Math.PI/2)ang+=Math.PI;
     const w=l.w||(l.w=l.el.offsetWidth||70),hw=Math.abs(Math.cos(ang))*w/2+6,hh=Math.abs(Math.sin(ang))*w/2+6,b=[a[0]-hw,a[1]-hh,a[0]+hw,a[1]+hh];
     if(hits(b,placed)){vis(l.el,false);continue;}placed.push(b);place(l.el,l.pos,0,"c",ang);}
-  const dOn=districtsOn&&d>1.6&&d<12;for(const a of distLabels){if(!dOn){vis(a.el,false);continue;}const r=place(a.el,a.pos,0,"c");if(!r)continue;const w=a.el.offsetWidth||80,b=[r[0]-w/2,r[1]-10,r[0]+w/2,r[1]+10];if(hits(b,placed))vis(a.el,false);else placed.push(b);}
+  const dOn=districtsOn&&d>1.6&&d<12;for(const a of distLabels){if(!dOn){vis(a.el,false);continue;}const r=place(a.el,a.pos,0,"c");if(!r)continue;const w=wOf(a.el)||80,b=[r[0]-w/2,r[1]-10,r[0]+w/2,r[1]+10];if(hits(b,placed))vis(a.el,false);else placed.push(b);}
 }
 
 /* ---------- side panel: ranking, filters, search ---------- */
@@ -404,9 +421,11 @@ addEventListener("keydown",e=>{
 /* ---------- scale bar & compass ---------- */
 const scaleEl=$("#scale"),scaleBar=scaleEl.querySelector("span"),scaleTxt=scaleEl.querySelector("b"),needle=$("#needle");
 const NICE=[0.01,0.02,0.05,0.1,0.2,0.5,1,2,5];
+// Runs every frame (the compass reads the controls, which can settle a frame after the camera), but only touches the DOM on a change.
+let hudW,hudT,hudR;
 function updateHud(d){const kmPerPx=2*d*Math.tan(THREE.MathUtils.degToRad(camera.fov/2))/H;let km=NICE[0];for(const n of NICE)if(n/kmPerPx<=120)km=n;
-  scaleBar.style.width=(km/kmPerPx).toFixed(0)+"px";scaleTxt.textContent=km<1?Math.round(km*1000)+" m":km+" km";
-  needle.style.transform=`rotate(${controls.getAzimuthalAngle()}rad)`;}
+  const w=(km/kmPerPx).toFixed(0)+"px",t=km<1?Math.round(km*1000)+" m":km+" km",r=`rotate(${controls.getAzimuthalAngle()}rad)`;
+  if(w!==hudW)scaleBar.style.width=hudW=w;if(t!==hudT)scaleTxt.textContent=hudT=t;if(r!==hudR)needle.style.transform=hudR=r;}
 
 /* ---------- loop ---------- */
 const NARROW=900;   // matches the bottom-sheet breakpoint in index.html
@@ -417,6 +436,21 @@ function updateOffset(){const desk=W>NARROW,card=!cardEl.hidden;const tx=desk?(-
   camera.setViewOffset(W,H,off.x,off.y,W,H);}
 function resize(){W=innerWidth;H=innerHeight;renderer.setSize(W,H,false);camera.aspect=W/H;camera.fov=W<=NARROW?55:42;camera.updateProjectionMatrix();}
 addEventListener("resize",resize);resize();
+// Draw only when the picture can have changed: the camera moved, the user did something, the selected pillar is
+// pulsing or a metro train is in view. Nothing is drawn while the loader still covers the map.
+let ready=false,dirty=true,trainsSeen=false;const wake=()=>{dirty=true;};
+["pointerdown","pointermove","pointerup","pointercancel","touchstart","touchmove","touchend","wheel","keydown","keyup","click","input","change","resize"]
+  .forEach(t=>addEventListener(t,wake,{capture:true,passive:true}));
+if(document.fonts)document.fonts.addEventListener("loadingdone",()=>{remeasure();wake();});
+addEventListener("resize",remeasure);
+// Damping keeps nudging the camera by ever smaller amounts for seconds; below 1e-9 (a micrometre, a millionth of a pixel) that's not worth a frame.
+const camSig=new Float64Array(26),camNow=new Float64Array(26);
+function camChanged(){const p=camera.position,q=camera.quaternion,t=controls.target;
+  camNow.set([p.x,p.y,p.z,q.x,q.y,q.z,q.w,t.x,t.y,t.z]);camNow.set(camera.projectionMatrix.elements,10);
+  for(let i=0;i<26;i++)if(Math.abs(camNow[i]-camSig[i])>1e-9){camSig.set(camNow);return true;}return false;}
+const frustum=new THREE.Frustum(),pv=new THREE.Matrix4(),carS=new THREE.Sphere();
+function trainsInView(){camera.updateMatrixWorld();pv.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);frustum.setFromProjectionMatrix(pv);
+  return LINES.some(L=>L.train.visible&&L.train.children.some(car=>frustum.intersectsSphere(carS.set(car.position,L.car*1.5))));}
 let last=performance.now();
 function frame(now){
   const dt=Math.min(0.05,(now-last)/1000);last=now;
@@ -426,7 +460,12 @@ function frame(now){
   updateMetro(d,dt);updateOffset();
   const bs=clamp(d*0.022,0.035,0.3);
   COMPANIES.forEach(c=>{const s=c===selected?1.4*(1+0.18*Math.sin(now/260)):1;c.obj.ring.scale.set(s,s,1);const k=c===hovered||c===selected?1.5:1;c.obj.beacon.scale.setScalar(bs*k);});
-  renderer.render(scene,camera);updateLabels(d);updateHud(d);
+  if(ready){const moved=camChanged(),trains=trainsInView();
+    // one more frame after the last train leaves the view, to clear it from the screen
+    if(dirty||moved||selected||trains||trainsSeen)renderer.render(scene,camera);
+    if(dirty||moved)updateLabels(d);
+    updateHud(d);
+    dirty=false;trainsSeen=trains;}
   requestAnimationFrame(frame);
 }
 applyPalette();applyVisibility();renderRank();
@@ -452,8 +491,8 @@ const loadMsg=$("#loadMsg"),loadBar=$("#loadBar");
     loadMsg.textContent="Raising buildings…";
     const nB=await buildBuildings(head,S,f=>{loadBar.style.width=(f*100).toFixed(1)+"%";loadMsg.textContent=`Raising buildings… ${Math.round(f*100)}%`;});
     seatPillars();
-    lampPts=new THREE.Points(new THREE.BufferGeometry().setAttribute("position",new THREE.Float32BufferAttribute(lampPos,3)),new THREE.PointsMaterial({color:0xffc879,size:0.0035,transparent:true,opacity:.85,depthWrite:false}));
-    scene.add(lampPts);
+    lampPts=new THREE.Points(dropAfterUpload(new THREE.BufferGeometry().setAttribute("position",new THREE.Float32BufferAttribute(lampPos,3))),new THREE.PointsMaterial({color:0xffc879,size:0.0035,transparent:true,opacity:.85,depthWrite:false}));
+    scene.add(lampPts);lampPos.length=0;
     // place names from the data
     waterLabels=head.waterLabels.map(([n,x,y,area])=>{const p=sxz(x,y);return {name:n,area,pos:new THREE.Vector3(p[0],0.002,p[1]),el:mk("wl",esc(n))};}).sort((a,b)=>b.area-a.area);
     roadLabels=head.roadLabels.map(([n,x,y,area,ang])=>{const p=sxz(x,y);return {name:n,area,pos:new THREE.Vector3(p[0],0.002,p[1]),dir:new THREE.Vector3(Math.cos(ang)*0.02,0,-Math.sin(ang)*0.02),el:mk("rl",esc(n))};});
@@ -462,6 +501,8 @@ const loadMsg=$("#loadMsg"),loadBar=$("#loadBar");
       .concat(roadLabels.filter(l=>!seen.has(l.name)&&seen.add(l.name)).map(l=>({n:l.name,kind:"Street",p:l.pos.clone().setY(0),d:0.35})));
     applyPalette();
     $("#stat").textContent=`${nB.toLocaleString("en-GB")} buildings · ${nTrees.toLocaleString("en-GB")} trees`;
+    // upload the city and compile the shaders while the loader still covers the map
+    renderer.render(scene,camera);ready=true;dirty=true;
     $("#loader").classList.add("done");animateTo(HOME,reduce?1:2400);
   }catch(err){loadMsg.textContent=err.message||"The map could not be loaded.";$("#loader").classList.add("error");console.error(err);}
 })();
