@@ -2,6 +2,8 @@
 
 A 3D night map of Amsterdam that shows what tech companies pay. Every building is real: 146,431 footprints with their measured heights from 3DBAG, on top of water, parks, streets and rail from the Kadaster's TOP10NL. 65 tech companies appear as glowing pillars above their offices, and each pillar's height is the company's median total compensation in the Greater Amsterdam Area, from Levels.fyi.
 
+**Live map: <https://jvannistelrooy.github.io/amsterdam-pay-map/>**
+
 Inspired by [Ville Lumière](https://arikhanacademic-cpu.github.io/ville-lumiere/), Ari Khan's map of Paris tech pay, which was itself inspired by Levels.fyi's Peninsula atlas.
 
 ## Using the map

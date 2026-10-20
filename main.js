@@ -378,7 +378,18 @@ const ray=new THREE.Raycaster(),ptr=new THREE.Vector2(),tip=$("#tip");let down=n
 function pick(e){const r=canvas.getBoundingClientRect();ptr.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);ray.setFromCamera(ptr,camera);const h=ray.intersectObjects(pickables.filter(m=>m.visible));return h.length?h[0].object.userData.c:null;}
 canvas.addEventListener("pointerdown",e=>{down=[e.clientX,e.clientY];anim=null;lockTilt();});
 canvas.addEventListener("pointerup",e=>{if(!down)return;const moved=Math.hypot(e.clientX-down[0],e.clientY-down[1]);down=null;if(moved>5)return;const c=pick(e);if(c)openCompany(c,true);else closeCard();});
-canvas.addEventListener("wheel",()=>{anim=null;lockTilt();},{passive:true});
+// Wheel zooms toward the ground point under the cursor (the built-in controls only zoom to the screen centre).
+// Captured on window so MapControls never sees the wheel; pinch zoom on touch still goes through the controls.
+const groundPlane=new THREE.Plane(new THREE.Vector3(0,1,0),0),zoomPt=new THREE.Vector3();let zoomPending=0;
+addEventListener("wheel",e=>{if(e.target!==canvas&&!(e.target.closest&&e.target.closest("#labels")))return;e.preventDefault();e.stopPropagation();anim=null;lockTilt();
+  const r=canvas.getBoundingClientRect();ptr.set((e.clientX-r.left)/r.width*2-1,-((e.clientY-r.top)/r.height)*2+1);ray.setFromCamera(ptr,camera);
+  if(!ray.ray.intersectPlane(groundPlane,zoomPt)||zoomPt.distanceTo(camera.position)>controls.maxDistance*3)zoomPt.copy(controls.target);
+  const dy=e.deltaY*(e.deltaMode===1?16:e.deltaMode===2?H:1);zoomPending+=clamp(dy,-240,240)*0.0016;},{passive:false,capture:true});
+function stepZoom(){if(Math.abs(zoomPending)<1e-4){zoomPending=0;return;}
+  const step=reduce?zoomPending:zoomPending*0.28;zoomPending-=step;
+  const d=camera.position.distanceTo(controls.target),nd=clamp(d*Math.exp(step),controls.minDistance,controls.maxDistance),k=nd/d;
+  if(Math.abs(k-1)<1e-6){zoomPending=0;return;}
+  controls.target.sub(zoomPt).multiplyScalar(k).add(zoomPt);camera.position.sub(zoomPt).multiplyScalar(k).add(zoomPt);controls.target.y=0;}
 canvas.addEventListener("pointermove",e=>{if(e.pointerType!=="mouse"||e.buttons)return;const c=pick(e);
   if(c!==hovered){if(hovered)hovered.obj.cap.material.color.copy(hovered.obj.cap.userData.col);hovered=c;if(c)c.obj.cap.material.color.setHex(0xffffff);canvas.style.cursor=c?"pointer":"";}
   if(c){tip.hidden=false;tip.innerHTML=`<b>${esc(c.n)}</b><span>${shortPay(c)} · ${esc(c.hood)}</span>`;tip.style.transform=`translate(${e.clientX+14}px,${e.clientY+14}px)`;}else tip.hidden=true;});
@@ -398,17 +409,18 @@ function updateHud(d){const kmPerPx=2*d*Math.tan(THREE.MathUtils.degToRad(camera
   needle.style.transform=`rotate(${controls.getAzimuthalAngle()}rad)`;}
 
 /* ---------- loop ---------- */
+const NARROW=900;   // matches the bottom-sheet breakpoint in index.html
 // Centre the map in the area the panels leave free.
 const off={x:0,y:0};
-function updateOffset(){const desk=W>720,card=!cardEl.hidden;const tx=desk?(-(364)+(card?384:0))/2:0,ty=desk?0:(card?H*0.26:60);
+function updateOffset(){const desk=W>NARROW,card=!cardEl.hidden;const tx=desk?(-(364)+(card?384:0))/2:0,ty=desk?0:(card?H*0.26:60);
   off.x+=(tx-off.x)*0.12;off.y+=(ty-off.y)*0.12;if(Math.abs(off.x)<0.5&&Math.abs(off.y)<0.5&&Math.abs(tx)<0.5&&Math.abs(ty)<0.5){if(camera.view&&camera.view.enabled)camera.clearViewOffset();return;}
   camera.setViewOffset(W,H,off.x,off.y,W,H);}
-function resize(){W=innerWidth;H=innerHeight;renderer.setSize(W,H,false);camera.aspect=W/H;camera.fov=W<720?55:42;camera.updateProjectionMatrix();}
+function resize(){W=innerWidth;H=innerHeight;renderer.setSize(W,H,false);camera.aspect=W/H;camera.fov=W<=NARROW?55:42;camera.updateProjectionMatrix();}
 addEventListener("resize",resize);resize();
 let last=performance.now();
 function frame(now){
   const dt=Math.min(0.05,(now-last)/1000);last=now;
-  if(!stepAnim(now)){controls.update();
+  if(!stepAnim(now)){stepZoom();controls.update();
     const t=controls.target,cx=clamp(t.x,BOUNDS.x0,BOUNDS.x1),cz=clamp(t.z,BOUNDS.z0,BOUNDS.z1);if(cx!==t.x||cz!==t.z){camera.position.x+=cx-t.x;camera.position.z+=cz-t.z;t.set(cx,0,cz);}}
   const d=camera.position.distanceTo(controls.target);
   updateMetro(d,dt);updateOffset();
